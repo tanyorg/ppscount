@@ -140,3 +140,81 @@ pub fn is_target_packet(
 
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    // Helper function to build a dummy Ethernet + IPv4 + TCP packet
+    fn create_dummy_tcp_packet(src_ip: [u8; 4], dst_port: u16) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // 1. Ethernet Header (14 bytes)
+        pkt.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // Dst MAC
+        pkt.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]); // Src MAC
+        pkt.extend_from_slice(&[0x08, 0x00]); // EtherType: IPv4 (0x0800)
+
+        // 2. IPv4 Header (20 bytes)
+        pkt.push(0x45); // Version 4, IHL 5 (20 bytes)
+        pkt.push(0x00); // TOS
+        pkt.extend_from_slice(&[0x00, 0x28]); // Total Length: 40
+        pkt.extend_from_slice(&[0x00, 0x01]); // Identification
+        pkt.extend_from_slice(&[0x00, 0x00]); // Flags / Fragment Offset
+        pkt.push(64); // TTL
+        pkt.push(6); // Protocol: TCP (6)
+        pkt.extend_from_slice(&[0x00, 0x00]); // Checksum
+        pkt.extend_from_slice(&src_ip); // Src IP
+        pkt.extend_from_slice(&[10, 0, 0, 1]); // Dst IP
+
+        // 3. TCP Header (20 bytes)
+        pkt.extend_from_slice(&[0x04, 0xD2]); // Src Port: 1234
+        pkt.extend_from_slice(&dst_port.to_be_bytes()); // Dst Port
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Seq Number
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Ack Number
+        pkt.push(0x50); // Data Offset: 5 (20 bytes)
+        pkt.push(0x02); // Flags: SYN
+        pkt.extend_from_slice(&[0x70, 0x00]); // Window Size
+        pkt.extend_from_slice(&[0x00, 0x00]); // Checksum
+        pkt.extend_from_slice(&[0x00, 0x00]); // Urgent Pointer
+
+        pkt
+    }
+
+    #[test]
+    fn test_valid_packet_matching() {
+        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
+
+        // Should match port 80
+        assert!(is_target_packet(&pkt, 14, Some(80), &[]));
+    }
+
+    #[test]
+    fn test_port_mismatch() {
+        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
+
+        // Should fail if target port is 443
+        assert!(!is_target_packet(&pkt, 14, Some(443), &[]));
+    }
+
+    #[test]
+    fn test_cidr_exclusion() {
+        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
+        let exclude_net = IpNet::from_str("192.168.1.0/24").unwrap();
+
+        // Should be excluded if source IP matches the CIDR range
+        assert!(!is_target_packet(&pkt, 14, Some(80), &[exclude_net]));
+
+        // Should pass if source IP is outside the excluded CIDR range
+        let other_net = IpNet::from_str("10.0.0.0/8").unwrap();
+        assert!(is_target_packet(&pkt, 14, Some(80), &[other_net]));
+    }
+
+    #[test]
+    fn test_truncated_packet_safety() {
+        // Malformed 5-byte packet (should return false without crashing or out-of-bounds access)
+        let short_pkt = vec![0x00, 0x11, 0x22, 0x33, 0x44];
+
+        assert!(!is_target_packet(&short_pkt, 14, None, &[]));
+    }
+}
