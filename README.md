@@ -32,6 +32,7 @@ Count inbound packets/sec from interface or pcap file with exclusion filter.
 Usage: ppscount [OPTIONS]
 
 Options:
+
 | -i | --interface <INTERFACE> | Network interface to capture [default: eth0] |
 | -f | --file <FILE> | Path to pcap file |
 | -p | --port <PORT> | Target destination port |
