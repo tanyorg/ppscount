@@ -1,9 +1,9 @@
+pub mod backend;
+pub mod raw_socket;
+
 use anyhow::{bail, Context, Result};
 use chrono::{Local, TimeZone};
 use ipnet::IpNet;
-use libc::{
-    bind, recvfrom, setsockopt, sockaddr, sockaddr_ll, socklen_t, AF_PACKET, ETH_P_ALL, SOCK_RAW, SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
-};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::PathBuf;
@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::packet::is_target_packet;
+use backend::PacketBackend;
 
 fn print_line(sec: i64, count: usize, scale: usize) {
     let timestamp = match Local.timestamp_opt(sec, 0).single() {
@@ -38,7 +39,6 @@ pub fn process_pcap(
 ) -> Result<()> {
     let file = File::open(pcap_path)
         .with_context(|| format!("Failed to open pcap file '{:?}'", pcap_path))?;
-    // Optimize I/O overhead for large pcap files
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
 
     let mut global_header = [0u8; 24];
@@ -83,14 +83,13 @@ pub fn process_pcap(
 
     while running.load(Ordering::SeqCst) {
         if reader.read_exact(&mut header_buf).is_err() {
-            break; // Normal EOF
+            break;
         }
 
         let ts_sec = read_u32(&header_buf[0..4]) as i64;
         let ts_usec = read_u32(&header_buf[4..8]) as f64;
         let incl_len = read_u32(&header_buf[8..12]) as usize;
 
-        // Skip corrupted packet length
         if incl_len > 65535 {
             eprintln!("Warning: Corrupt packet length ({}) skipped.", incl_len);
             break;
@@ -105,21 +104,19 @@ pub fn process_pcap(
             break;
         }
 
-        // Determine link layer offset dynamically
         let link_offset = match network {
-            0 => 4,        // DLT_NULL / Loopback
-            1 => 14,       // DLT_EN10MB (Ethernet)
-            12 | 101 => 0, // DLT_RAW / IP
-            113 => 16,     // DLT_LINUX_SLL
-            276 => 20,     // DLT_LINUX_SLL2
+            0 => 4,
+            1 => 14,
+            12 | 101 => 0,
+            113 => 16,
+            276 => 20,
             127 => {
-                // DLT_IEEE802_11_RADIO (Radiotap)
                 if incl_len < 4 {
                     continue;
                 }
                 read_u16(&pkt_buf[2..4]) as usize
             }
-            _ => 14, // Fallback to Ethernet offset
+            _ => 14,
         };
 
         let pkt_data = &pkt_buf[..incl_len];
@@ -135,7 +132,6 @@ pub fn process_pcap(
 
             let cur = current_sec.unwrap_or(ts_sec);
 
-            // Handle out-of-order timestamps gracefully
             if ts_sec < cur {
                 packet_count += 1;
                 continue;
@@ -177,79 +173,30 @@ pub fn process_live(
     scale: usize,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
-    let if_name =
-        std::ffi::CString::new(interface).context("Invalid interface name (contains null byte)")?;
-    let if_index = unsafe { libc::if_nametoindex(if_name.as_ptr()) };
-    if if_index == 0 {
-        bail!("Network interface '{}' not found", interface);
+    #[cfg(target_os = "linux")]
+    {
+        let mut backend = raw_socket::RawSocketBackend::new(interface)?;
+        run_live_loop(&mut backend, target_port, exclude_networks, scale, running)
     }
 
-    let fd = unsafe { libc::socket(AF_PACKET, SOCK_RAW, (ETH_P_ALL as u16).to_be() as i32) };
-    if fd < 0 {
-        bail!("Failed to create raw socket. Root privileges (sudo) required");
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (interface, target_port, exclude_networks, scale, running);
+        bail!("Live capture on this OS is not supported yet (use -f for PCAP files)");
     }
+}
 
-    let rcvbuf: libc::c_int = 4 * 1024 * 1024;
-    unsafe {
-        setsockopt(
-            fd,
-            SOL_SOCKET,
-            SO_RCVBUF,
-            &rcvbuf as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&rcvbuf) as socklen_t,
-        );
-    }
-
-    let timeout = libc::timeval {
-        tv_sec: 0,
-        tv_usec: 100_000,
-    };
-    unsafe {
-        setsockopt(
-            fd,
-            SOL_SOCKET,
-            SO_RCVTIMEO,
-            &timeout as *const _ as *const libc::c_void,
-            std::mem::size_of_val(&timeout) as socklen_t,
-        );
-    }
-
-    let mut sll: sockaddr_ll = unsafe { std::mem::zeroed() };
-    sll.sll_family = AF_PACKET as u16;
-    sll.sll_ifindex = if_index as i32;
-    sll.sll_protocol = (ETH_P_ALL as u16).to_be();
-
-    let res = unsafe {
-        bind(
-            fd,
-            &sll as *const _ as *const sockaddr,
-            std::mem::size_of::<sockaddr_ll>() as socklen_t,
-        )
-    };
-    if res < 0 {
-        bail!("Error binding raw socket to interface '{}'", interface);
-    }
-
-    let mut buf = [0u8; 65535];
-    let mut storage: sockaddr_ll = unsafe { std::mem::zeroed() };
-
+fn run_live_loop(
+    backend: &mut dyn PacketBackend,
+    target_port: Option<u16>,
+    exclude_networks: &[IpNet],
+    scale: usize,
+    running: Arc<AtomicBool>,
+) -> Result<()> {
     let mut packet_count = 0;
     let mut current_sec = Local::now().timestamp();
 
     while running.load(Ordering::SeqCst) {
-        let mut storage_len = std::mem::size_of::<sockaddr_ll>() as socklen_t;
-
-        let n = unsafe {
-            recvfrom(
-                fd,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-                0,
-                &mut storage as *mut _ as *mut sockaddr,
-                &mut storage_len,
-            )
-        };
-
         let now_sec = Local::now().timestamp();
 
         while now_sec > current_sec {
@@ -258,13 +205,10 @@ pub fn process_live(
             current_sec += 1;
         }
 
-        if n < 0 {
-            continue;
-        }
-
-        let pkt_data = &buf[..n as usize];
-        if is_target_packet(pkt_data, 14, target_port, exclude_networks) {
-            packet_count += 1;
+        if let Some((pkt_data, link_offset)) = backend.next_packet()? {
+            if is_target_packet(pkt_data, link_offset, target_port, exclude_networks) {
+                packet_count += 1;
+            }
         }
     }
 
