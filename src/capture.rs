@@ -6,7 +6,7 @@ use libc::{
     PACKET_OUTGOING, SOCK_RAW, SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
 };
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -20,6 +20,7 @@ fn print_line(sec: i64, count: usize, scale: usize) {
         Some(dt) => dt.format("%Y/%m/%d %H:%M:%S").to_string(),
         None => format!("UnixTS:{}", sec),
     };
+
     let bar = count
         .checked_div(scale)
         .map(|n| format!("  {}", "*".repeat(n)))
@@ -36,11 +37,14 @@ pub fn process_pcap(
     realtime: bool,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
-    let mut file = File::open(pcap_path)
+    let file = File::open(pcap_path)
         .with_context(|| format!("Failed to open pcap file '{:?}'", pcap_path))?;
+    // Optimize I/O overhead for large pcap files
+    let mut reader = BufReader::with_capacity(1024 * 1024, file);
 
     let mut global_header = [0u8; 24];
-    file.read_exact(&mut global_header)
+    reader
+        .read_exact(&mut global_header)
         .context("Invalid pcap file: header too short")?;
 
     let magic = &global_header[0..4];
@@ -59,13 +63,16 @@ pub fn process_pcap(
         }
     };
 
-    let network = read_u32(&global_header[20..24]);
-    let link_offset = match network {
-        1 => 14,   // DLT_EN10MB (Ethernet)
-        113 => 16, // DLT_LINUX_SLL (Linux cooked v1)
-        276 => 20, // DLT_LINUX_SLL2 (Linux cooked v2)
-        other => bail!("Unsupported link-layer header type (DLT): {}", other),
+    let read_u16 = |b: &[u8]| -> u16 {
+        let arr = [b[0], b[1]];
+        if is_big_endian {
+            u16::from_be_bytes(arr)
+        } else {
+            u16::from_le_bytes(arr)
+        }
     };
+
+    let network = read_u32(&global_header[20..24]);
 
     let mut first_pcap_time: Option<f64> = None;
     let mut first_wall_time: Option<Instant> = None;
@@ -76,31 +83,49 @@ pub fn process_pcap(
     let mut pkt_buf = vec![0u8; 65535];
 
     while running.load(Ordering::SeqCst) {
-        if file.read_exact(&mut header_buf).is_err() {
-            break; // EOF
+        if reader.read_exact(&mut header_buf).is_err() {
+            break; // Normal EOF
         }
 
         let ts_sec = read_u32(&header_buf[0..4]) as i64;
         let ts_usec = read_u32(&header_buf[4..8]) as f64;
         let incl_len = read_u32(&header_buf[8..12]) as usize;
 
+        // Skip corrupted packet length
         if incl_len > 65535 {
-            bail!("Corrupt packet length in pcap: {} bytes", incl_len);
+            eprintln!("Warning: Corrupt packet length ({}) skipped.", incl_len);
+            break;
         }
 
         if pkt_buf.len() < incl_len {
             pkt_buf.resize(incl_len, 0);
         }
 
-        file.read_exact(&mut pkt_buf[..incl_len])
-            .context("Unexpected EOF while reading packet payload")?;
+        if reader.read_exact(&mut pkt_buf[..incl_len]).is_err() {
+            eprintln!("Warning: Unexpected EOF in packet payload, stopping.");
+            break;
+        }
 
-        if is_target_packet(
-            &pkt_buf[..incl_len],
-            link_offset,
-            target_port,
-            exclude_networks,
-        ) {
+        // Determine link layer offset dynamically
+        let link_offset = match network {
+            0 => 4,        // DLT_NULL / Loopback
+            1 => 14,       // DLT_EN10MB (Ethernet)
+            12 | 101 => 0, // DLT_RAW / IP
+            113 => 16,     // DLT_LINUX_SLL
+            276 => 20,     // DLT_LINUX_SLL2
+            127 => {
+                // DLT_IEEE802_11_RADIO (Radiotap)
+                if incl_len < 4 {
+                    continue;
+                }
+                read_u16(&pkt_buf[2..4]) as usize
+            }
+            _ => 14, // Fallback to Ethernet offset
+        };
+
+        let pkt_data = &pkt_buf[..incl_len];
+
+        if is_target_packet(pkt_data, link_offset, target_port, exclude_networks) {
             let pkt_time = ts_sec as f64 + (ts_usec / 1_000_000.0);
 
             if first_pcap_time.is_none() {
@@ -109,12 +134,20 @@ pub fn process_pcap(
                 current_sec = Some(ts_sec);
             }
 
-            let mut cur = current_sec.unwrap_or(ts_sec);
-            while ts_sec > cur {
-                print_line(cur, packet_count, scale);
+            let cur = current_sec.unwrap_or(ts_sec);
+
+            // Handle out-of-order timestamps gracefully
+            if ts_sec < cur {
+                packet_count += 1;
+                continue;
+            }
+
+            let mut step_sec = cur;
+            while ts_sec > step_sec {
+                print_line(step_sec, packet_count, scale);
 
                 if realtime {
-                    let pcap_elapsed = (cur + 1) as f64 - first_pcap_time.unwrap();
+                    let pcap_elapsed = (step_sec + 1) as f64 - first_pcap_time.unwrap();
                     let wall_elapsed = first_wall_time.unwrap().elapsed().as_secs_f64();
                     let sleep_time = pcap_elapsed - wall_elapsed;
                     if sleep_time > 0.0 {
@@ -123,8 +156,8 @@ pub fn process_pcap(
                 }
 
                 packet_count = 0;
-                cur += 1;
-                current_sec = Some(cur);
+                step_sec += 1;
+                current_sec = Some(step_sec);
             }
 
             packet_count += 1;

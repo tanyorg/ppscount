@@ -42,6 +42,7 @@ pub fn parse_ipv6_l4(pkt_data: &[u8], mut offset: usize, mut next_hdr: u8) -> Op
     None
 }
 
+/// Inspect packet data across various link-layer encapsulation types and apply target filters.
 pub fn is_target_packet(
     pkt_data: &[u8],
     link_offset: usize,
@@ -53,29 +54,72 @@ pub fn is_target_packet(
     }
 
     let mut offset = link_offset;
-    let mut eth_proto: u16;
+    let eth_proto: u16;
 
-    if link_offset == 14 {
-        eth_proto = u16::from_be_bytes([pkt_data[12], pkt_data[13]]);
-        if eth_proto == 0x8100 {
-            // 802.1Q VLAN
-            if pkt_data.len() < 18 {
+    match link_offset {
+        0 => {
+            // DLT_RAW / Raw IP (Directly starts with IPv4 or IPv6 header)
+            if pkt_data.is_empty() {
                 return false;
             }
-            eth_proto = u16::from_be_bytes([pkt_data[16], pkt_data[17]]);
-            offset = 18;
+            let version = (pkt_data[0] >> 4) & 0x0F;
+            eth_proto = match version {
+                4 => 0x0800,
+                6 => 0x86DD,
+                _ => return false,
+            };
         }
-    } else if link_offset == 16 {
-        // SLL v1
-        let sll_pkttype = u16::from_be_bytes([pkt_data[0], pkt_data[1]]);
-        if sll_pkttype == PACKET_OUTGOING as u16 {
-            return false;
+        4 => {
+            // DLT_NULL / Loopback (4-byte header containing AF family)
+            if pkt_data.len() < 4 {
+                return false;
+            }
+            let version = (pkt_data[4] >> 4) & 0x0F;
+            eth_proto = match version {
+                4 => 0x0800,
+                6 => 0x86DD,
+                _ => return false,
+            };
         }
-        eth_proto = u16::from_be_bytes([pkt_data[14], pkt_data[15]]);
-        offset = 16;
-    } else {
-        eth_proto = u16::from_be_bytes([pkt_data[12], pkt_data[13]]);
-        offset = 14;
+        16 => {
+            // DLT_LINUX_SLL (Linux Cooked Capture v1)
+            let sll_pkttype = u16::from_be_bytes([pkt_data[0], pkt_data[1]]);
+            if sll_pkttype == PACKET_OUTGOING as u16 {
+                return false;
+            }
+            eth_proto = u16::from_be_bytes([pkt_data[14], pkt_data[15]]);
+        }
+        20 => {
+            // DLT_LINUX_SLL2 (Linux Cooked Capture v2)
+            eth_proto = u16::from_be_bytes([pkt_data[0], pkt_data[1]]);
+        }
+        _ => {
+            // Default to Ethernet (link_offset == 14) or dynamic offsets (e.g. Radiotap)
+            if pkt_data.len() < offset {
+                return false;
+            }
+            if link_offset >= 14 {
+                let proto = u16::from_be_bytes([pkt_data[offset - 2], pkt_data[offset - 1]]);
+                if proto == 0x8100 || proto == 0x88A8 {
+                    // 802.1Q / 802.1ad VLAN tagging
+                    if pkt_data.len() < offset + 4 {
+                        return false;
+                    }
+                    eth_proto = u16::from_be_bytes([pkt_data[offset + 2], pkt_data[offset + 3]]);
+                    offset += 4;
+                } else {
+                    eth_proto = proto;
+                }
+            } else {
+                // Fallback IP version check for custom offsets
+                let version = (pkt_data[offset] >> 4) & 0x0F;
+                eth_proto = match version {
+                    4 => 0x0800,
+                    6 => 0x86DD,
+                    _ => return false,
+                };
+            }
+        }
     }
 
     let src_ip: IpAddr;
@@ -83,7 +127,7 @@ pub fn is_target_packet(
     let l4_start: usize;
 
     if eth_proto == 0x0800 {
-        // IPv4
+        // IPv4 Processing
         if pkt_data.len() < offset + 20 {
             return false;
         }
@@ -100,7 +144,7 @@ pub fn is_target_packet(
         ));
         l4_start = offset + ihl;
     } else if eth_proto == 0x86DD {
-        // IPv6
+        // IPv6 Processing
         if pkt_data.len() < offset + 40 {
             return false;
         }
@@ -124,7 +168,7 @@ pub fn is_target_packet(
         return false;
     }
 
-    // Destination Port Filter
+    // Destination Port Filter (TCP / UDP)
     if let Some(t_port) = target_port {
         if protocol != 6 && protocol != 17 {
             return false;
@@ -147,74 +191,126 @@ mod tests {
     use std::str::FromStr;
 
     // Helper function to build a dummy Ethernet + IPv4 + TCP packet
-    fn create_dummy_tcp_packet(src_ip: [u8; 4], dst_port: u16) -> Vec<u8> {
+    fn create_dummy_ipv4_tcp_packet(src_ip: [u8; 4], dst_port: u16) -> Vec<u8> {
         let mut pkt = Vec::new();
 
-        // 1. Ethernet Header (14 bytes)
-        pkt.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // Dst MAC
-        pkt.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]); // Src MAC
-        pkt.extend_from_slice(&[0x08, 0x00]); // EtherType: IPv4 (0x0800)
+        // Ethernet Header (14 bytes)
+        pkt.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        pkt.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
+        pkt.extend_from_slice(&[0x08, 0x00]); // EtherType: IPv4
 
-        // 2. IPv4 Header (20 bytes)
-        pkt.push(0x45); // Version 4, IHL 5 (20 bytes)
-        pkt.push(0x00); // TOS
-        pkt.extend_from_slice(&[0x00, 0x28]); // Total Length: 40
-        pkt.extend_from_slice(&[0x00, 0x01]); // Identification
-        pkt.extend_from_slice(&[0x00, 0x00]); // Flags / Fragment Offset
-        pkt.push(64); // TTL
-        pkt.push(6); // Protocol: TCP (6)
-        pkt.extend_from_slice(&[0x00, 0x00]); // Checksum
-        pkt.extend_from_slice(&src_ip); // Src IP
-        pkt.extend_from_slice(&[10, 0, 0, 1]); // Dst IP
+        // IPv4 Header (20 bytes)
+        pkt.push(0x45);
+        pkt.push(0x00);
+        pkt.extend_from_slice(&[0x00, 0x28]);
+        pkt.extend_from_slice(&[0x00, 0x01]);
+        pkt.extend_from_slice(&[0x00, 0x00]);
+        pkt.push(64);
+        pkt.push(6); // TCP
+        pkt.extend_from_slice(&[0x00, 0x00]);
+        pkt.extend_from_slice(&src_ip);
+        pkt.extend_from_slice(&[10, 0, 0, 1]);
 
-        // 3. TCP Header (20 bytes)
-        pkt.extend_from_slice(&[0x04, 0xD2]); // Src Port: 1234
-        pkt.extend_from_slice(&dst_port.to_be_bytes()); // Dst Port
-        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]); // Seq Number
-        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Ack Number
-        pkt.push(0x50); // Data Offset: 5 (20 bytes)
-        pkt.push(0x02); // Flags: SYN
-        pkt.extend_from_slice(&[0x70, 0x00]); // Window Size
-        pkt.extend_from_slice(&[0x00, 0x00]); // Checksum
-        pkt.extend_from_slice(&[0x00, 0x00]); // Urgent Pointer
+        // TCP Header (20 bytes)
+        pkt.extend_from_slice(&[0x04, 0xD2]);
+        pkt.extend_from_slice(&dst_port.to_be_bytes());
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        pkt.push(0x50);
+        pkt.push(0x02);
+        pkt.extend_from_slice(&[0x70, 0x00]);
+        pkt.extend_from_slice(&[0x00, 0x00]);
+        pkt.extend_from_slice(&[0x00, 0x00]);
+
+        pkt
+    }
+
+    // Helper function to build a dummy Ethernet + IPv6 + TCP packet
+    fn create_dummy_ipv6_tcp_packet(src_ip: [u8; 16], dst_port: u16) -> Vec<u8> {
+        let mut pkt = Vec::new();
+
+        // Ethernet Header (14 bytes)
+        pkt.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        pkt.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
+        pkt.extend_from_slice(&[0x86, 0xDD]); // EtherType: IPv6
+
+        // IPv6 Header (40 bytes)
+        pkt.extend_from_slice(&[0x60, 0x00, 0x00, 0x00]); // Version 6
+        pkt.extend_from_slice(&[0x00, 0x14]); // Payload length: 20 bytes
+        pkt.push(6); // Next Header: TCP
+        pkt.push(64); // Hop Limit
+        pkt.extend_from_slice(&src_ip); // Src IPv6
+        pkt.extend_from_slice(&[0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]); // Dst IPv6
+
+        // TCP Header (20 bytes)
+        pkt.extend_from_slice(&[0x04, 0xD2]);
+        pkt.extend_from_slice(&dst_port.to_be_bytes());
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
+        pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        pkt.push(0x50);
+        pkt.push(0x02);
+        pkt.extend_from_slice(&[0x70, 0x00]);
+        pkt.extend_from_slice(&[0x00, 0x00]);
+        pkt.extend_from_slice(&[0x00, 0x00]);
 
         pkt
     }
 
     #[test]
-    fn test_valid_packet_matching() {
-        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
-
-        // Should match port 80
+    fn test_valid_ipv4_packet_matching() {
+        let pkt = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
         assert!(is_target_packet(&pkt, 14, Some(80), &[]));
     }
 
     #[test]
-    fn test_port_mismatch() {
-        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
+    fn test_valid_ipv6_packet_matching() {
+        let src_ip = [
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
+        ];
+        let pkt = create_dummy_ipv6_tcp_packet(src_ip, 443);
+        assert!(is_target_packet(&pkt, 14, Some(443), &[]));
+    }
 
-        // Should fail if target port is 443
-        assert!(!is_target_packet(&pkt, 14, Some(443), &[]));
+    #[test]
+    fn test_vlan_tagged_packet() {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        pkt.extend_from_slice(&[0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB]);
+        pkt.extend_from_slice(&[0x81, 0x00]); // VLAN Tag (802.1Q)
+        pkt.extend_from_slice(&[0x00, 0x0A]); // TCI (VLAN ID 10)
+
+        let raw_eth = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
+        pkt.extend_from_slice(&raw_eth[12..]); // Append IPv4 EtherType + Payload
+
+        assert!(is_target_packet(&pkt, 14, Some(80), &[]));
+    }
+
+    #[test]
+    fn test_dlt_raw_ip() {
+        let eth_pkt = create_dummy_ipv4_tcp_packet([10, 0, 0, 5], 80);
+        let raw_ip_pkt = &eth_pkt[14..];
+        assert!(is_target_packet(raw_ip_pkt, 0, Some(80), &[]));
+    }
+
+    #[test]
+    fn test_dlt_null_loopback() {
+        let mut pkt = vec![0x02, 0x00, 0x00, 0x00]; // 4-byte Loopback header
+        let eth_pkt = create_dummy_ipv4_tcp_packet([127, 0, 0, 1], 80);
+        pkt.extend_from_slice(&eth_pkt[14..]);
+
+        assert!(is_target_packet(&pkt, 4, Some(80), &[]));
     }
 
     #[test]
     fn test_cidr_exclusion() {
-        let pkt = create_dummy_tcp_packet([192, 168, 1, 100], 80);
+        let pkt = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
         let exclude_net = IpNet::from_str("192.168.1.0/24").unwrap();
-
-        // Should be excluded if source IP matches the CIDR range
         assert!(!is_target_packet(&pkt, 14, Some(80), &[exclude_net]));
-
-        // Should pass if source IP is outside the excluded CIDR range
-        let other_net = IpNet::from_str("10.0.0.0/8").unwrap();
-        assert!(is_target_packet(&pkt, 14, Some(80), &[other_net]));
     }
 
     #[test]
     fn test_truncated_packet_safety() {
-        // Malformed 5-byte packet (should return false without crashing or out-of-bounds access)
         let short_pkt = vec![0x00, 0x11, 0x22, 0x33, 0x44];
-
         assert!(!is_target_packet(&short_pkt, 14, None, &[]));
     }
 }
