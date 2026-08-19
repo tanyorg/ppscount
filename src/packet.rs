@@ -1,5 +1,4 @@
 use ipnet::IpNet;
-use libc::PACKET_OUTGOING;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Walk IPv6 extension headers to locate the L4 protocol and L4 header start offset.
@@ -83,10 +82,6 @@ pub fn is_target_packet(
         }
         16 => {
             // DLT_LINUX_SLL (Linux Cooked Capture v1)
-            let sll_pkttype = u16::from_be_bytes([pkt_data[0], pkt_data[1]]);
-            if sll_pkttype == PACKET_OUTGOING as u16 {
-                return false;
-            }
             eth_proto = u16::from_be_bytes([pkt_data[14], pkt_data[15]]);
         }
         20 => {
@@ -168,7 +163,7 @@ pub fn is_target_packet(
         return false;
     }
 
-    // Destination Port Filter (TCP / UDP)
+    // Destination / Source Port Filter (TCP / UDP)
     if let Some(t_port) = target_port {
         if protocol != 6 && protocol != 17 {
             return false;
@@ -176,8 +171,11 @@ pub fn is_target_packet(
         if pkt_data.len() < l4_start + 4 {
             return false;
         }
+        let src_port = u16::from_be_bytes([pkt_data[l4_start], pkt_data[l4_start + 1]]);
         let dst_port = u16::from_be_bytes([pkt_data[l4_start + 2], pkt_data[l4_start + 3]]);
-        if dst_port != t_port {
+
+        // Either src or dst port must match target_port
+        if src_port != t_port && dst_port != t_port {
             return false;
         }
     }

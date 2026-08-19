@@ -2,8 +2,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{Local, TimeZone};
 use ipnet::IpNet;
 use libc::{
-    bind, recvfrom, setsockopt, sockaddr, sockaddr_ll, socklen_t, AF_PACKET, ETH_P_ALL,
-    PACKET_OUTGOING, SOCK_RAW, SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
+    bind, recvfrom, setsockopt, sockaddr, sockaddr_ll, socklen_t, AF_PACKET, ETH_P_ALL, SOCK_RAW, SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
 };
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -260,10 +259,6 @@ pub fn process_live(
         }
 
         if n < 0 {
-            continue;
-        }
-
-        if storage.sll_pkttype == PACKET_OUTGOING {
             continue;
         }
 
