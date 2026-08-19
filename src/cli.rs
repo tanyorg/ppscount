@@ -5,49 +5,35 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "ppscount",
-    author,
     version,
-    about = "Count inbound packets/sec from interface or pcap file with exclusion filter."
+    about = "High-performance packet per second counter"
 )]
 pub struct Args {
-    #[arg(
-        short,
-        long,
-        default_value = "eth0",
-        help = "Network interface to capture"
-    )]
+    /// Network interface to capture (Live mode)
+    #[arg(short, long, default_value = "eth0")]
     pub interface: String,
 
-    #[arg(
-        short,
-        long,
-        help = "Path to pcap file (if specified, reads from file instead of interface)"
-    )]
+    /// Read from PCAP file instead of live capture
+    #[arg(short, long, value_name = "FILE")]
     pub file: Option<PathBuf>,
 
-    #[arg(short, long, help = "Target destination port (default: all ports)")]
+    /// Target L4 port to count (TCP/UDP)
+    #[arg(short, long)]
     pub port: Option<u16>,
 
-    #[arg(
-        short = 'o',
-        long = "omit",
-        num_args = 1..,
-        help = "IP prefixes/addresses to exclude (e.g., -o 192.168.111.0/24 2001:db8::/32)"
-    )]
+    /// Exclude traffic from specified CIDR networks (can be repeated)
+    #[arg(short = 'x', long = "exclude")]
     pub omit: Vec<IpNet>,
 
-    #[arg(
-        short,
-        long,
-        default_value_t = 100,
-        help = "Number of packets per '*' character in the bar chart (set 0 to disable)"
-    )]
+    /// Scale factor for asterisk visualization bar
+    #[arg(short, long, default_value_t = 100)]
     pub scale: usize,
 
-    #[arg(
-        short,
-        long,
-        help = "Simulate real-time playback speed when reading from pcap file"
-    )]
+    /// Playback PCAP file in real-time speed
+    #[arg(short, long)]
     pub realtime: bool,
+
+    /// Enable AF_XDP driver mode (EXPERIMENTAL: under development, may not capture all queues or run reliably)
+    #[arg(long = "af-xdp")]
+    pub af_xdp: bool,
 }

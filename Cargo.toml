@@ -2,7 +2,7 @@
 name = "ppscount"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["Fuminori -Tany- Tanizaki"]
 description = "Count inbound packets/sec from interface or pcap file with exclusion filter."
 
 [dependencies]
@@ -12,3 +12,6 @@ chrono = "0.4"
 libc = "0.2"
 ctrlc = "3.4"
 anyhow = "1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+xsk-rs = "0.7" # AF_XDP socket handling library

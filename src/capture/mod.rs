@@ -1,6 +1,9 @@
 pub mod backend;
 pub mod raw_socket;
 
+#[cfg(target_os = "linux")]
+pub mod af_xdp;
+
 use anyhow::{bail, Context, Result};
 use chrono::{Local, TimeZone};
 use ipnet::IpNet;
@@ -171,17 +174,30 @@ pub fn process_live(
     target_port: Option<u16>,
     exclude_networks: &[IpNet],
     scale: usize,
+    use_af_xdp: bool,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
+        if use_af_xdp {
+            let mut backend = af_xdp::AfXdpBackend::new(interface)?;
+            return run_live_loop(&mut backend, target_port, exclude_networks, scale, running);
+        }
+
         let mut backend = raw_socket::RawSocketBackend::new(interface)?;
         run_live_loop(&mut backend, target_port, exclude_networks, scale, running)
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (interface, target_port, exclude_networks, scale, running);
+        let _ = (
+            interface,
+            target_port,
+            exclude_networks,
+            scale,
+            use_af_xdp,
+            running,
+        );
         bail!("Live capture on this OS is not supported yet (use -f for PCAP files)");
     }
 }
