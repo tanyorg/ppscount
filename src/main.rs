@@ -2,6 +2,7 @@ mod capture;
 mod cli;
 mod packet;
 
+use anyhow::Result;
 use capture::{process_live, process_pcap};
 use clap::Parser;
 use cli::Args;
@@ -9,7 +10,7 @@ use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-fn main() {
+fn main() -> Result<()> {
     let args = Args::parse();
 
     let running = Arc::new(AtomicBool::new(true));
@@ -50,7 +51,7 @@ fn main() {
             args.scale,
             args.realtime,
             running,
-        );
+        )?;
     } else {
         println!(
             "ppscount: Monitoring Inbound Packets/sec on {} ({})...",
@@ -67,6 +68,8 @@ fn main() {
         }
         println!("Press Ctrl+C to stop.\n");
 
-        process_live(&args.interface, args.port, &args.omit, args.scale, running);
+        process_live(&args.interface, args.port, &args.omit, args.scale, running)?;
     }
+
+    Ok(())
 }
