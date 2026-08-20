@@ -177,7 +177,7 @@ pub fn process_live(
     target_port: Option<u16>,
     exclude_networks: &[IpNet],
     scale: usize,
-    _use_af_xdp: bool,
+    use_af_xdp: bool,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -193,6 +193,8 @@ pub fn process_live(
 
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = use_af_xdp;
+
         // Use libpcap-based backend on non-Linux platforms (macOS, *BSD, etc.).
         // The pcap backend uses the same PacketBackend trait so the live loop can be reused.
         let mut backend = pcap_backend::PcapBackend::new(interface)?;
