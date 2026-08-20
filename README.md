@@ -10,14 +10,16 @@ A lightweight CLI tool written in Rust to count and visualize inbound packets pe
 - In-terminal ASCII bar chart representation
 
 ## Requirements
-- Linux (uses `AF_PACKET` raw sockets for live capture)
-- Root privileges (`sudo`) for live interface capture
+- For Linux: AF_PACKET (raw sockets) and optionally AF_XDP for high-performance capture
+- For macOS / BSD: libpcap (system-provided on macOS)
+- Root privileges (`sudo`) are typically required for live interface capture
 
 ## Supported Platforms
 
 Tested and confirmed working on:
 
 - Ubuntu 24.04.4 LTS
+- macOS (live capture via libpcap)
 
 ## Installation
 
