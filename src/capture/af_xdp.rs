@@ -57,12 +57,10 @@ impl AfXdpBackend {
             .with_context(|| format!("Invalid network interface name: '{}'", interface))?;
         let queue_id = 0u32;
 
-        let (tx_queue, rx_queue, fq_cq) = unsafe {
-            Socket::new(socket_config, &umem, &dev_name, queue_id)
-        }
-        .context(
-            "Failed to bind AF_XDP socket. Root privileges (sudo) and XDP support required.",
-        )?;
+        let (tx_queue, rx_queue, fq_cq) =
+            unsafe { Socket::new(socket_config, &umem, &dev_name, queue_id) }.context(
+                "Failed to bind AF_XDP socket. Root privileges (sudo) and XDP support required.",
+            )?;
 
         let (mut fill_queue, comp_queue) =
             fq_cq.context("Failed to initialize AF_XDP Fill/Completion queues")?;

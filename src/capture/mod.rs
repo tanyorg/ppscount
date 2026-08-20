@@ -4,6 +4,9 @@ pub mod raw_socket;
 #[cfg(target_os = "linux")]
 pub mod af_xdp;
 
+#[cfg(not(target_os = "linux"))]
+pub mod pcap_backend;
+
 use anyhow::{bail, Context, Result};
 use chrono::{Local, TimeZone};
 use ipnet::IpNet;
@@ -174,7 +177,7 @@ pub fn process_live(
     target_port: Option<u16>,
     exclude_networks: &[IpNet],
     scale: usize,
-    use_af_xdp: bool,
+    _use_af_xdp: bool,
     running: Arc<AtomicBool>,
 ) -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -190,15 +193,10 @@ pub fn process_live(
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (
-            interface,
-            target_port,
-            exclude_networks,
-            scale,
-            use_af_xdp,
-            running,
-        );
-        bail!("Live capture on this OS is not supported yet (use -f for PCAP files)");
+        // Use libpcap-based backend on non-Linux platforms (macOS, *BSD, etc.).
+        // The pcap backend uses the same PacketBackend trait so the live loop can be reused.
+        let mut backend = pcap_backend::PcapBackend::new(interface)?;
+        run_live_loop(&mut backend, target_port, exclude_networks, scale, running)
     }
 }
 

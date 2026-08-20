@@ -60,8 +60,10 @@ fn main() -> Result<()> {
         if args.af_xdp {
             println!("Driver mode: AF_XDP (eBPF Generic/SKB Mode) [EXPERIMENTAL]");
             println!("Note: AF_XDP mode is currently in development and may not operate reliably depending on NIC driver / queue configuration.");
+        } else if cfg!(target_os = "linux") {
+            println!("Driver mode: Standard Socket (AF_PACKET)");
         } else {
-            println!("Driver mode: Standard Socket (libpcap/AF_PACKET)");
+            println!("Driver mode: Standard Socket (libpcap)");
         }
         if !args.omit.is_empty() {
             let nets: Vec<String> = args.omit.iter().map(|n| n.to_string()).collect();
