@@ -1,20 +1,20 @@
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 use anyhow::{Context, Result};
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 use std::num::NonZeroU32;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 use xsk_rs::{
     config::{BindFlags, QueueSize, SocketConfig, UmemConfig, XdpFlags},
     CompQueue, FillQueue, FrameDesc, RxQueue, Socket, TxQueue, Umem,
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 use super::backend::PacketBackend;
 
 const BATCH_SIZE: usize = 64;
 const FRAME_SIZE: usize = 4096;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub struct AfXdpBackend {
     umem: Umem,
     _tx_queue: TxQueue,
@@ -28,7 +28,7 @@ pub struct AfXdpBackend {
     recycle_buf: Vec<FrameDesc>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 impl AfXdpBackend {
     pub fn new(interface: &str) -> Result<Self> {
         let queue_size = QueueSize::new(4096).context("Invalid queue size")?;
@@ -100,7 +100,7 @@ impl AfXdpBackend {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 impl PacketBackend for AfXdpBackend {
     fn next_packet(&mut self) -> Result<Option<(&[u8], usize)>> {
         loop {

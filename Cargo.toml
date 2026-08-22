@@ -5,6 +5,10 @@ edition = "2021"
 authors = ["Fuminori -Tany- Tanizaki"]
 description = "Count inbound packets/sec from interface or pcap file with exclusion filter."
 
+[features]
+default = []
+af-xdp = ["dep:xsk-rs"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 ipnet = "2.9"
@@ -15,4 +19,4 @@ anyhow = "1.0"
 pcap = "0.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-xsk-rs = "0.7" # AF_XDP socket handling library
+xsk-rs = { version = "0.7", optional = true } # AF_XDP socket handling library

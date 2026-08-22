@@ -28,6 +28,12 @@ cargo build --release
 ```
 Binary will be generated at ./target/release/ppscount.
 
+To include AF_XDP support on Linux, enable the feature explicitly:
+
+```bash
+cargo build --release --features af-xdp
+```
+
 ## Usage
 Count inbound packets/sec from interface or pcap file with exclusion filter.
 
@@ -43,6 +49,7 @@ Options:
 | `-o` | `--omit <OMIT>...` | IP prefixes/addresses to exclude (e.g., -o 192.168.1.0/24) |
 | `-s` | `--scale <SCALE>` | Packets per '*' character in bar chart [default: 100] |
 | `-r` | `--realtime` | Simulate real-time playback speed when reading pcap |
+| | `--af-xdp` | Use AF_XDP capture (requires a build with `--features af-xdp`) |
 | `-h` | `--help` | Print help |
 | `-V` | `--version` | Print version |
 

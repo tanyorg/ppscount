@@ -1,7 +1,7 @@
 pub mod backend;
 pub mod raw_socket;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "af-xdp"))]
 pub mod af_xdp;
 
 #[cfg(not(target_os = "linux"))]
@@ -182,9 +182,15 @@ pub fn process_live(
 ) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
+        #[cfg(feature = "af-xdp")]
         if use_af_xdp {
             let mut backend = af_xdp::AfXdpBackend::new(interface)?;
             return run_live_loop(&mut backend, target_port, exclude_networks, scale, running);
+        }
+
+        #[cfg(not(feature = "af-xdp"))]
+        if use_af_xdp {
+            bail!("AF_XDP support is not included in this build; use --features af-xdp");
         }
 
         let mut backend = raw_socket::RawSocketBackend::new(interface)?;
