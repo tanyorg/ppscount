@@ -2,8 +2,8 @@
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "linux")]
 use libc::{
-    bind, recvfrom, setsockopt, sockaddr, sockaddr_ll, socklen_t, AF_PACKET, ETH_P_ALL, SOCK_RAW,
-    SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
+    bind, recvfrom, setsockopt, sockaddr, sockaddr_ll, socklen_t, AF_PACKET, ETH_P_ALL,
+    PACKET_OUTGOING, SOCK_RAW, SOL_SOCKET, SO_RCVBUF, SO_RCVTIMEO,
 };
 
 #[cfg(target_os = "linux")]
@@ -114,6 +114,10 @@ impl PacketBackend for RawSocketBackend {
 
         if n < 0 {
             return Ok(None); // Timeout or signal interrupted
+        }
+
+        if self.storage.sll_pkttype == PACKET_OUTGOING as u8 {
+            return Ok(None);
         }
 
         let link_offset = 14; // Standard Ethernet header length

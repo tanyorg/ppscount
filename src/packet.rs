@@ -46,6 +46,7 @@ pub fn is_target_packet(
     pkt_data: &[u8],
     link_offset: usize,
     target_port: Option<u16>,
+    destination_only: bool,
     exclude_networks: &[IpNet],
 ) -> bool {
     if pkt_data.len() < link_offset {
@@ -174,8 +175,9 @@ pub fn is_target_packet(
         let src_port = u16::from_be_bytes([pkt_data[l4_start], pkt_data[l4_start + 1]]);
         let dst_port = u16::from_be_bytes([pkt_data[l4_start + 2], pkt_data[l4_start + 3]]);
 
-        // Either src or dst port must match target_port
-        if src_port != t_port && dst_port != t_port {
+        if (destination_only && dst_port != t_port)
+            || (!destination_only && src_port != t_port && dst_port != t_port)
+        {
             return false;
         }
     }
@@ -257,7 +259,14 @@ mod tests {
     #[test]
     fn test_valid_ipv4_packet_matching() {
         let pkt = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
-        assert!(is_target_packet(&pkt, 14, Some(80), &[]));
+        assert!(is_target_packet(&pkt, 14, Some(80), false, &[]));
+    }
+
+    #[test]
+    fn test_destination_only_port_filter() {
+        let pkt = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
+        assert!(is_target_packet(&pkt, 14, Some(1234), false, &[]));
+        assert!(!is_target_packet(&pkt, 14, Some(1234), true, &[]));
     }
 
     #[test]
@@ -266,7 +275,7 @@ mod tests {
             0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
         ];
         let pkt = create_dummy_ipv6_tcp_packet(src_ip, 443);
-        assert!(is_target_packet(&pkt, 14, Some(443), &[]));
+        assert!(is_target_packet(&pkt, 14, Some(443), false, &[]));
     }
 
     #[test]
@@ -280,14 +289,14 @@ mod tests {
         let raw_eth = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
         pkt.extend_from_slice(&raw_eth[12..]); // Append IPv4 EtherType + Payload
 
-        assert!(is_target_packet(&pkt, 14, Some(80), &[]));
+        assert!(is_target_packet(&pkt, 14, Some(80), false, &[]));
     }
 
     #[test]
     fn test_dlt_raw_ip() {
         let eth_pkt = create_dummy_ipv4_tcp_packet([10, 0, 0, 5], 80);
         let raw_ip_pkt = &eth_pkt[14..];
-        assert!(is_target_packet(raw_ip_pkt, 0, Some(80), &[]));
+        assert!(is_target_packet(raw_ip_pkt, 0, Some(80), false, &[]));
     }
 
     #[test]
@@ -296,19 +305,19 @@ mod tests {
         let eth_pkt = create_dummy_ipv4_tcp_packet([127, 0, 0, 1], 80);
         pkt.extend_from_slice(&eth_pkt[14..]);
 
-        assert!(is_target_packet(&pkt, 4, Some(80), &[]));
+        assert!(is_target_packet(&pkt, 4, Some(80), false, &[]));
     }
 
     #[test]
     fn test_cidr_exclusion() {
         let pkt = create_dummy_ipv4_tcp_packet([192, 168, 1, 100], 80);
         let exclude_net = IpNet::from_str("192.168.1.0/24").unwrap();
-        assert!(!is_target_packet(&pkt, 14, Some(80), &[exclude_net]));
+        assert!(!is_target_packet(&pkt, 14, Some(80), false, &[exclude_net]));
     }
 
     #[test]
     fn test_truncated_packet_safety() {
         let short_pkt = vec![0x00, 0x11, 0x22, 0x33, 0x44];
-        assert!(!is_target_packet(&short_pkt, 14, None, &[]));
+        assert!(!is_target_packet(&short_pkt, 14, None, false, &[]));
     }
 }

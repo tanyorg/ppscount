@@ -21,6 +21,10 @@ pub struct Args {
     #[arg(short, long)]
     pub port: Option<u16>,
 
+    /// Match only the destination port instead of the source or destination port
+    #[arg(long)]
+    pub destination_only: bool,
+
     /// Exclude traffic from specified CIDR networks (can be repeated)
     #[arg(short = 'x', long = "exclude")]
     pub omit: Vec<IpNet>,

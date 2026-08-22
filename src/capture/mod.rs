@@ -38,6 +38,7 @@ fn print_line(sec: i64, count: usize, scale: usize) {
 pub fn process_pcap(
     pcap_path: &PathBuf,
     target_port: Option<u16>,
+    destination_only: bool,
     exclude_networks: &[IpNet],
     scale: usize,
     realtime: bool,
@@ -127,7 +128,13 @@ pub fn process_pcap(
 
         let pkt_data = &pkt_buf[..incl_len];
 
-        if is_target_packet(pkt_data, link_offset, target_port, exclude_networks) {
+        if is_target_packet(
+            pkt_data,
+            link_offset,
+            target_port,
+            destination_only,
+            exclude_networks,
+        ) {
             let pkt_time = ts_sec as f64 + (ts_usec / 1_000_000.0);
 
             if first_pcap_time.is_none() {
@@ -175,6 +182,7 @@ pub fn process_pcap(
 pub fn process_live(
     interface: &str,
     target_port: Option<u16>,
+    destination_only: bool,
     exclude_networks: &[IpNet],
     scale: usize,
     use_af_xdp: bool,
@@ -185,7 +193,14 @@ pub fn process_live(
         #[cfg(feature = "af-xdp")]
         if use_af_xdp {
             let mut backend = af_xdp::AfXdpBackend::new(interface)?;
-            return run_live_loop(&mut backend, target_port, exclude_networks, scale, running);
+            return run_live_loop(
+                &mut backend,
+                target_port,
+                destination_only,
+                exclude_networks,
+                scale,
+                running,
+            );
         }
 
         #[cfg(not(feature = "af-xdp"))]
@@ -194,7 +209,14 @@ pub fn process_live(
         }
 
         let mut backend = raw_socket::RawSocketBackend::new(interface)?;
-        run_live_loop(&mut backend, target_port, exclude_networks, scale, running)
+        run_live_loop(
+            &mut backend,
+            target_port,
+            destination_only,
+            exclude_networks,
+            scale,
+            running,
+        )
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -204,13 +226,21 @@ pub fn process_live(
         // Use libpcap-based backend on non-Linux platforms (macOS, *BSD, etc.).
         // The pcap backend uses the same PacketBackend trait so the live loop can be reused.
         let mut backend = pcap_backend::PcapBackend::new(interface)?;
-        run_live_loop(&mut backend, target_port, exclude_networks, scale, running)
+        run_live_loop(
+            &mut backend,
+            target_port,
+            destination_only,
+            exclude_networks,
+            scale,
+            running,
+        )
     }
 }
 
 fn run_live_loop(
     backend: &mut dyn PacketBackend,
     target_port: Option<u16>,
+    destination_only: bool,
     exclude_networks: &[IpNet],
     scale: usize,
     running: Arc<AtomicBool>,
@@ -228,7 +258,13 @@ fn run_live_loop(
         }
 
         if let Some((pkt_data, link_offset)) = backend.next_packet()? {
-            if is_target_packet(pkt_data, link_offset, target_port, exclude_networks) {
+            if is_target_packet(
+                pkt_data,
+                link_offset,
+                target_port,
+                destination_only,
+                exclude_networks,
+            ) {
                 packet_count += 1;
             }
         }

@@ -47,6 +47,7 @@ fn main() -> Result<()> {
         process_pcap(
             pcap_file,
             args.port,
+            args.destination_only,
             &args.omit,
             args.scale,
             args.realtime,
@@ -79,6 +80,7 @@ fn main() -> Result<()> {
         process_live(
             &args.interface,
             args.port,
+            args.destination_only,
             &args.omit,
             args.scale,
             args.af_xdp,

@@ -49,6 +49,7 @@ Options:
 | `-i` | `--interface <INTERFACE>` | Network interface to capture (Live mode) [default: eth0] |
 | `-f` | `--file <FILE>` | Read from PCAP file instead of live capture |
 | `-p` | `--port <PORT>` | Target L4 port to count (TCP/UDP) |
+| | `--destination-only` | Match only the destination port |
 | `-x` | `--exclude <OMIT>` | Exclude traffic from specified CIDR networks (can be repeated) |
 | `-s` | `--scale <SCALE>` | Scale factor for asterisk visualization bar [default: 100] |
 | `-r` | `--realtime` | Playback PCAP file in real-time speed |
@@ -61,7 +62,7 @@ Options:
 Live Capture:
 
 ```bash
-sudo ./target/release/ppscount -i eth0 -p 80 -o 192.168.1.0/24
+sudo ./target/release/ppscount -i eth0 -p 80 -x 192.168.1.0/24
 ```
 
 AF_XDP Live Capture (Linux, feature-enabled build):
