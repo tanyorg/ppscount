@@ -46,13 +46,13 @@ Options:
 
 | Short | Long / Argument | Description |
 | :--- | :--- | :--- |
-| `-i` | `--interface <INTERFACE>` | Network interface to capture [default: eth0] |
-| `-f` | `--file <FILE>` | Path to pcap file |
-| `-p` | `--port <PORT>` | Target destination port |
-| `-o` | `--omit <OMIT>...` | IP prefixes/addresses to exclude (e.g., -o 192.168.1.0/24) |
-| `-s` | `--scale <SCALE>` | Packets per '*' character in bar chart [default: 100] |
-| `-r` | `--realtime` | Simulate real-time playback speed when reading pcap |
-| | `--af-xdp` | Use AF_XDP capture (requires a build with `--features af-xdp`) |
+| `-i` | `--interface <INTERFACE>` | Network interface to capture (Live mode) [default: eth0] |
+| `-f` | `--file <FILE>` | Read from PCAP file instead of live capture |
+| `-p` | `--port <PORT>` | Target L4 port to count (TCP/UDP) |
+| `-x` | `--exclude <OMIT>` | Exclude traffic from specified CIDR networks (can be repeated) |
+| `-s` | `--scale <SCALE>` | Scale factor for asterisk visualization bar [default: 100] |
+| `-r` | `--realtime` | Playback PCAP file in real-time speed |
+| | `--af-xdp` | Enable AF_XDP driver mode (requires a build with `--features af-xdp`) |
 | `-h` | `--help` | Print help |
 | `-V` | `--version` | Print version |
 
