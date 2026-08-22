@@ -21,17 +21,23 @@ impl RawSocketBackend {
     pub fn new(interface: &str) -> Result<Self> {
         let if_name = std::ffi::CString::new(interface)
             .context("Invalid interface name (contains null byte)")?;
+        // SAFETY: `if_name` is a valid NUL-terminated interface name and is
+        // alive for the duration of the call.
         let if_index = unsafe { libc::if_nametoindex(if_name.as_ptr()) };
         if if_index == 0 {
             bail!("Network interface '{}' not found", interface);
         }
 
+        // SAFETY: the arguments are valid constants and no Rust references
+        // are exposed through the returned file descriptor.
         let fd = unsafe { libc::socket(AF_PACKET, SOCK_RAW, (ETH_P_ALL as u16).to_be() as i32) };
         if fd < 0 {
             bail!("Failed to create raw socket. Root privileges (sudo) required");
         }
 
         let rcvbuf: libc::c_int = 4 * 1024 * 1024;
+        // SAFETY: `rcvbuf` is a valid pointer to a value of the size passed to
+        // setsockopt, and `fd` is a valid socket descriptor.
         unsafe {
             setsockopt(
                 fd,
@@ -46,6 +52,8 @@ impl RawSocketBackend {
             tv_sec: 0,
             tv_usec: 100_000,
         };
+        // SAFETY: `timeout` is a valid timeval with the matching size, and
+        // `fd` is a valid socket descriptor.
         unsafe {
             setsockopt(
                 fd,
@@ -56,11 +64,15 @@ impl RawSocketBackend {
             );
         }
 
+        // SAFETY: zero is a valid initial byte representation for sockaddr_ll;
+        // all fields used below are initialized before bind.
         let mut sll: sockaddr_ll = unsafe { std::mem::zeroed() };
         sll.sll_family = AF_PACKET as u16;
         sll.sll_ifindex = if_index as i32;
         sll.sll_protocol = (ETH_P_ALL as u16).to_be();
 
+        // SAFETY: `sll` is initialized as an AF_PACKET sockaddr and the
+        // pointer and length describe that exact value.
         let res = unsafe {
             bind(
                 fd,
@@ -75,6 +87,8 @@ impl RawSocketBackend {
         Ok(Self {
             fd,
             buf: [0u8; 65535],
+            // SAFETY: zero is a valid initial byte representation for the
+            // address storage populated by recvfrom.
             storage: unsafe { std::mem::zeroed() },
         })
     }
@@ -85,6 +99,8 @@ impl PacketBackend for RawSocketBackend {
     fn next_packet(&mut self) -> Result<Option<(&[u8], usize)>> {
         let mut storage_len = std::mem::size_of::<sockaddr_ll>() as socklen_t;
 
+        // SAFETY: `self.fd` is owned by this backend and the descriptor is
+        // closed at most once.
         let n = unsafe {
             recvfrom(
                 self.fd,
@@ -109,6 +125,8 @@ impl PacketBackend for RawSocketBackend {
 impl Drop for RawSocketBackend {
     fn drop(&mut self) {
         if self.fd >= 0 {
+            // SAFETY: `self.fd` is owned by this backend and is closed only
+            // during Drop.
             unsafe {
                 libc::close(self.fd);
             }

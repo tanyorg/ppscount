@@ -57,6 +57,8 @@ impl AfXdpBackend {
             .with_context(|| format!("Invalid network interface name: '{}'", interface))?;
         let queue_id = 0u32;
 
+        // SAFETY: `umem` remains alive for the lifetime of both queues, and
+        // the parsed device name and queue id are valid for Socket::new.
         let (tx_queue, rx_queue, fq_cq) =
             unsafe { Socket::new(socket_config, &umem, &dev_name, queue_id) }.context(
                 "Failed to bind AF_XDP socket. Root privileges (sudo) and XDP support required.",
@@ -68,6 +70,8 @@ impl AfXdpBackend {
         // Populate RX Fill Queue with all initial frames
         let mut produced = 0;
         while produced < frame_descs.len() {
+            // SAFETY: every descriptor came from this UMEM, and ownership is
+            // transferred to the fill queue until it is returned by RX.
             let n = unsafe { fill_queue.produce(&frame_descs[produced..]) };
             if n == 0 {
                 break;
@@ -93,6 +97,8 @@ impl AfXdpBackend {
         if self.recycle_buf.is_empty() {
             return;
         }
+        // SAFETY: recycled descriptors belong to this UMEM and are no longer
+        // used by userspace or the RX queue while they are submitted here.
         let n = unsafe { self.fill_queue.produce(&self.recycle_buf) };
         if n > 0 {
             self.recycle_buf.drain(0..n);
@@ -112,10 +118,9 @@ impl PacketBackend for AfXdpBackend {
                 let desc = self.rx_batch[self.rx_idx];
                 self.rx_idx += 1;
 
-                let pkt_data = unsafe { self.umem.data(&desc) };
-                let pkt_slice = unsafe {
-                    std::slice::from_raw_parts(pkt_data.as_ref().as_ptr(), pkt_data.as_ref().len())
-                };
+                // SAFETY: `desc` was populated by this UMEM's RX queue and
+                // remains exclusively owned by userspace until recycled.
+                let pkt_slice = unsafe { self.umem.data(&desc) }.contents();
 
                 // Retrieve pristine FrameDesc from original vector using frame index
                 let frame_idx = desc.addr() / FRAME_SIZE;
@@ -131,6 +136,8 @@ impl PacketBackend for AfXdpBackend {
             self.rx_idx = 0;
             self.rx_count = 0;
 
+            // SAFETY: this RX queue is paired with `self.umem`, and the batch
+            // descriptors are not submitted to another queue.
             let rcvd = unsafe { self.rx_queue.consume(&mut self.rx_batch) };
             if rcvd > 0 {
                 self.rx_count = rcvd;
@@ -142,6 +149,8 @@ impl PacketBackend for AfXdpBackend {
 
             // 5. Poll kernel socket to trigger SKB driver processing
             if self.rx_queue.poll(10)? {
+                // SAFETY: same ownership and UMEM pairing as the consume
+                // call above.
                 let rcvd = unsafe { self.rx_queue.consume(&mut self.rx_batch) };
                 if rcvd > 0 {
                     self.rx_count = rcvd;
