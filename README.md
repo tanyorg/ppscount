@@ -26,12 +26,15 @@ Tested and confirmed working on:
 ```bash
 cargo build --release
 ```
-Binary will be generated at ./target/release/ppscount.
+This builds the standard AF_PACKET version. The binary will be generated at
+`./target/release/ppscount`.
 
-To include AF_XDP support on Linux, enable the feature explicitly:
+To include AF_XDP support on Linux, enable the feature explicitly. The
+resulting binary can select AF_XDP with `--af-xdp`:
 
 ```bash
 cargo build --release --features af-xdp
+sudo ./target/release/ppscount --af-xdp -i eth0
 ```
 
 ## Usage
@@ -59,6 +62,12 @@ Live Capture:
 
 ```bash
 sudo ./target/release/ppscount -i eth0 -p 80 -o 192.168.1.0/24
+```
+
+AF_XDP Live Capture (Linux, feature-enabled build):
+
+```bash
+sudo ./target/release/ppscount --af-xdp -i eth0
 ```
 
 PCAP Playback:
